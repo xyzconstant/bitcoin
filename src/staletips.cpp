@@ -83,12 +83,11 @@ void StaleTips::Add(const CBlockIndex* stale_tip)
     AssertLockHeld(::cs_main);
     bool have_block = (stale_tip->nStatus & BLOCK_HAVE_DATA);
 
-    int target_slot = -1;
-    int lowest_height_slot = -1;
+    Entry* target_slot = nullptr;
 
     for (size_t i = 0; i < MAX_STALE_TIPS; ++i) {
         if (m_tips[i].pindex == nullptr) {
-            if (target_slot == -1) target_slot = i;
+            if (target_slot == nullptr) target_slot = &m_tips[i];
             continue;
         }
 
@@ -102,38 +101,29 @@ void StaleTips::Add(const CBlockIndex* stale_tip)
             return;
         }
 
-        // New tip extends an existing entry - remove the old one
         if (IsAncestor(existing, stale_tip)) {
+            // New tip extends an existing entry - remove the old one
             m_tips[i].pindex = nullptr;
-            if (target_slot == -1) target_slot = i;
-        }
-        // New tip is ancestor of existing - don't add it
-        else if (IsAncestor(stale_tip, existing)) {
+            if (target_slot == nullptr) target_slot = &m_tips[i];
+            continue;
+        } else if (IsAncestor(stale_tip, existing)) {
+            // New tip is ancestor of existing - don't add it
             return;
         }
 
-        // Track lowest height for potential eviction
-        if (m_tips[i].pindex != nullptr) {
-            if (lowest_height_slot == -1 ||
-                m_tips[i].pindex->nHeight < m_tips[lowest_height_slot].pindex->nHeight) {
-                lowest_height_slot = i;
+        // Replace a lower-height stale tip if we haven't found an empty slot
+        if (target_slot == nullptr || target_slot->pindex != nullptr) {
+            auto height_limit = (target_slot == nullptr ? stale_tip->nHeight : target_slot->pindex->nHeight);
+            if (m_tips[i].pindex->nHeight < height_limit) {
+                target_slot = &m_tips[i];
             }
         }
     }
-
-    // No empty slot found - evict lowest height if new tip is higher
-    if (target_slot == -1) {
-        if (lowest_height_slot != -1 &&
-            stale_tip->nHeight > m_tips[lowest_height_slot].pindex->nHeight) {
-            target_slot = lowest_height_slot;
-        } else {
-            return; // New tip is worse than all existing tips
-        }
+    if (target_slot != nullptr) {
+        target_slot->pindex = stale_tip;
+        target_slot->header_seqno = ++m_last_seqno;
+        target_slot->block_seqno = have_block ? m_last_seqno : 0;
     }
-
-    m_tips[target_slot].pindex = stale_tip;
-    m_tips[target_slot].header_seqno = ++m_last_seqno;
-    m_tips[target_slot].block_seqno = have_block ? m_last_seqno : 0;
 }
 
 void StaleTips::Initialize(node::BlockManager& blockman, const CChain& chain)
@@ -148,8 +138,8 @@ void StaleTips::Initialize(node::BlockManager& blockman, const CChain& chain)
     std::set<const CBlockIndex*> has_children;
 
     for (const auto& [hash, block_index] : blockman.m_block_index) {
-        if (!block_index.IsValid(BLOCK_VALID_TREE)) continue;
-        if (block_index.nHeight < min_height) continue;
+        if (!block_index.IsValid(BLOCK_VALID_TREE)) continue; // Insufficiently connected
+        if (block_index.nHeight < min_height) continue; // Too old to be interesting
         if (chain.Contains(block_index)) continue; // Skip blocks on active chain
 
         if (GetEligibleForkPoint(chain, &block_index) != nullptr) {
@@ -188,12 +178,11 @@ std::pair<std::vector<StaleFork>, uint32_t> StaleTips::GetTipsToAnnounce(
         if (entry.pindex == nullptr) continue;
 
         uint32_t relevant_seqno = want_blocks ? entry.block_seqno : entry.header_seqno;
-        if (relevant_seqno == 0) continue; // No seqno means not ready (for blocks mode)
         if (relevant_seqno <= last_announced_seqno) continue;
 
         const CBlockIndex* fork_point = GetEligibleForkPoint(chain, entry.pindex);
         if (fork_point == nullptr) {
-            // No longer eligible (too old or reorged out), clear it
+            // No longer eligible (too old, no longer stale, etc), clear it
             entry.pindex = nullptr;
         } else {
             result.push_back({fork_point, entry.pindex});
