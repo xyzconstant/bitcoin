@@ -25,7 +25,6 @@
 #include <script/script_error.h>
 #include <script/sigcache.h>
 #include <script/verify_flags.h>
-#include <staletips.h>
 #include <sync.h>
 #include <txdb.h>
 #include <txmempool.h>
@@ -993,9 +992,6 @@ private:
     SteadyClock::duration GUARDED_BY(::cs_main) time_chainstate{};
     SteadyClock::duration GUARDED_BY(::cs_main) time_post_connect{};
 
-    //! Track recent stale tips
-    StaleTips m_staletips GUARDED_BY(::cs_main);
-
 protected:
     CBlockIndex* m_best_invalid GUARDED_BY(::cs_main){nullptr};
 
@@ -1183,9 +1179,6 @@ public:
      * `ImportBlocks()` finishes).
      */
     void UpdateIBDStatus() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-
-    StaleTips& GetStaleTips() EXCLUSIVE_LOCKS_REQUIRED(GetMutex()) { return m_staletips; }
-    const StaleTips& GetStaleTips() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex()) { return m_staletips; }
 
     node::BlockMap& BlockIndex() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
