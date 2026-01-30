@@ -230,6 +230,15 @@ void ValidationSignals::BlockConnected(const ChainstateRole& role, std::shared_p
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
 
+void ValidationSignals::BlockAcceptedNotActive(const CBlockIndex* pindex)
+{
+    auto log_msg = LOG_MSG("%s: block hash=%s block height=%d", __func__, pindex->GetBlockHash().ToString(), pindex->nHeight);
+    auto event = [pindex, this] {
+        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockAcceptedNotActive(pindex); });
+    };
+    ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
+}
+
 void ValidationSignals::MempoolTransactionsRemovedForBlock(const std::vector<RemovedMempoolTransactionInfo>& txs_removed_for_block, unsigned int nBlockHeight)
 {
     auto log_msg = LOG_MSG("%s: block height=%s txs removed=%s", __func__,
