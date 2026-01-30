@@ -4646,6 +4646,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
                 vInv[0] = CInv(MSG_BLOCK | GetFetchFlags(peer), blockhash);
                 MakeAndPushMessage(pfrom, NetMsgType::GETDATA, vInv);
             }
+            // Peer sent compact block, so they have block data, but don't request twice
+            HandleStaleTip(pfrom, peer, pindex, /*peer_has_block=*/!requested_block_from_this_peer);
             return;
         }
 
