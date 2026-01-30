@@ -1215,6 +1215,14 @@ public:
     }
 };
 
+template<typename T, typename Stream>
+T FromStream(Stream&& s)
+{
+    T result;
+    s >> result;
+    return result;
+}
+
 /**
  * Helper macro for SerParams structs
  *
