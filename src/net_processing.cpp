@@ -549,6 +549,7 @@ public:
     PeerManagerInfo GetInfo() const override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     std::vector<PrivateBroadcast::TxBroadcastInfo> GetPrivateBroadcastInfo() const override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     std::vector<CTransactionRef> AbortPrivateBroadcast(const uint256& id) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
+    std::vector<StaleFork> GetStaleTips() override EXCLUSIVE_LOCKS_REQUIRED(!cs_main);
     void SendPings() override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     void InitiateTxBroadcastToAll(const Txid& txid, const Wtxid& wtxid) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     void InitiateTxBroadcastPrivate(const CTransactionRef& tx) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
@@ -1910,6 +1911,12 @@ std::vector<CTransactionRef> PeerManagerImpl::AbortPrivateBroadcast(const uint25
     m_connman.m_private_broadcast.NumToOpenSub(connections_cancelled);
 
     return removed_txs;
+}
+
+std::vector<StaleFork> PeerManagerImpl::GetStaleTips()
+{
+    LOCK(::cs_main);
+    return m_stale_tips.GetTipsToAnnounce(m_chainman.ActiveChain(), 0, false).first;
 }
 
 void PeerManagerImpl::AddToCompactExtraTransactions(const CTransactionRef& tx)

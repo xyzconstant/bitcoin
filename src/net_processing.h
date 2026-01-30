@@ -12,6 +12,8 @@
 #include <private_broadcast.h>
 #include <protocol.h>
 #include <uint256.h>
+#include <staletips.h>
+#include <threadsafety.h>
 #include <util/expected.h>
 #include <validationinterface.h>
 
@@ -145,6 +147,8 @@ public:
      *         transactions may be returned.
      */
     virtual std::vector<CTransactionRef> AbortPrivateBroadcast(const uint256& id) = 0;
+    /** Get info about tracked stale tips */
+    virtual std::vector<StaleFork> GetStaleTips() = 0;
 
     /**
      * Initiate a transaction broadcast to eligible peers.
