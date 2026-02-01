@@ -2061,7 +2061,7 @@ PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
 
     // Initialize recent stale tips tracker
     LOCK(::cs_main);
-    m_stale_tips.Initialize(m_chainman.GetParams(), m_chainman.m_blockman, m_chainman.ActiveChain());
+    m_stale_tips.Initialize(m_chainman.GetParams().GetChainType(), m_chainman.m_blockman, m_chainman.ActiveChain());
 }
 
 void PeerManagerImpl::StartScheduledTasks(CScheduler& scheduler)
@@ -4884,7 +4884,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             LogDebug(BCLog::NET, "staleblock message had no headers, %s", pfrom.DisconnectMsg());
             pfrom.fDisconnect = true;
             return;
-        } else if (stale_tip_data.m_headers.size() > StaleTips::MAX_FORK_LENGTH) {
+        } else if (stale_tip_data.m_headers.size() > StaleTips::DEFAULT_MAX_FORK_LENGTH) {
             LogDebug(BCLog::NET, "staleblock message had too long header chain (%d entries), %s",
                 stale_tip_data.m_headers.size(), pfrom.DisconnectMsg());
             pfrom.fDisconnect = true;
@@ -4911,11 +4911,11 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
                 LogDebug(BCLog::NET, "ignoring staleblock with unknown fork point %s, peer=%d",
                          stale_tip_data.m_hash_fork_point.ToString(), pfrom.GetId());
                 return;
-            } else if (fork_point->nHeight + (int)headers.size() < active_tip->nHeight - StaleTips::MAX_HEIGHT_DELTA) {
+            } else if (fork_point->nHeight + (int)headers.size() < active_tip->nHeight - StaleTips::DEFAULT_MAX_HEIGHT_DELTA) {
                 LogDebug(BCLog::NET, "ignoring staleblock with too old fork point %s (%d + %d < %d - %d), peer=%d",
                          stale_tip_data.m_hash_fork_point.ToString(),
                          fork_point->nHeight, headers.size(),
-                         active_tip->nHeight, StaleTips::MAX_HEIGHT_DELTA,
+                         active_tip->nHeight, StaleTips::DEFAULT_MAX_HEIGHT_DELTA,
                          pfrom.GetId());
                 return;
             } else if (fork_point->nChainWork < GetAntiDoSWorkThreshold()) {
