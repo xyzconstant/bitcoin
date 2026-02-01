@@ -679,7 +679,7 @@ static RPCMethod getnetworkinfo()
                                 {RPCResult::Type::NUM, "score", "relative score"},
                             }},
                         }},
-                        {RPCResult::Type::ARR, "staletips", "recent stale block tips being tracked for relay",
+                        {RPCResult::Type::ARR, "staletips", "recent stale tips being tracked for relay",
                         {
                             {RPCResult::Type::OBJ, "", "",
                             {
