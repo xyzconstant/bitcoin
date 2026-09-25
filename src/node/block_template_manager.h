@@ -37,6 +37,28 @@ private:
     KernelNotifications& m_notifications;
     const BlockCreateOptions m_block_create_args;
 
+    /**
+     * Wait while the best known header extends the current chain tip AND at
+     * least one block is being added to the tip every 3 seconds. If the tip is
+     * sufficiently far behind, allow up to 20 seconds for the next tip update.
+     *
+     * It's not safe to keep waiting, because a malicious miner could announce
+     * a header and delay revealing the block, causing all other miners using
+     * this software to stall. At the same time, we need to balance between the
+     * default waiting time being brief, but not ending the cooldown prematurely
+     * when a random block is slow to download (or process).
+     *
+     * The cooldown only applies to createNewBlock(), which is typically called
+     * once per connected client. Subsequent templates are provided by
+     * waitNext().
+     *
+     * @param last_tip tip at the start of the cooldown window.
+     * @param interrupt_mining set to true to interrupt the cooldown.
+     *
+     * @returns false if interrupted.
+     */
+    bool CooldownIfHeadersAhead(const interfaces::BlockRef& last_tip, bool& interrupt_mining);
+
 public:
     explicit BlockTemplateManager(CTxMemPool& mempool,
                                   ChainstateManager& chainman,
@@ -68,27 +90,12 @@ public:
      *  left unchanged; the wait still ends on chain shutdown. */
     std::optional<interfaces::BlockRef> WaitTipChanged(const uint256& current_tip, MillisecondsDouble timeout = MillisecondsDouble::max());
 
-    /**
-     * Wait while the best known header extends the current chain tip AND at
-     * least one block is being added to the tip every 3 seconds. If the tip is
-     * sufficiently far behind, allow up to 20 seconds for the next tip update.
+    /** Wait for a tip, then for IBD and the header catch-up cooldown to end.
      *
-     * It's not safe to keep waiting, because a malicious miner could announce
-     * a header and delay revealing the block, causing all other miners using
-     * this software to stall. At the same time, we need to balance between the
-     * default waiting time being brief, but not ending the cooldown prematurely
-     * when a random block is slow to download (or process).
-     *
-     * The cooldown only applies to createNewBlock(), which is typically called
-     * once per connected client. Subsequent templates are provided by
-     * waitNext().
-     *
-     * @param last_tip tip at the start of the cooldown window.
      * @param interrupt_mining set to true to interrupt the cooldown.
      *
-     * @returns false if interrupted.
-     */
-    bool CooldownIfHeadersAhead(const interfaces::BlockRef& last_tip, bool& interrupt_mining);
+     * @return the tip, or nullopt if shutting down or interrupted. */
+    std::optional<interfaces::BlockRef> WaitUntilSynced(bool& interrupt_mining);
 
     /** Interrupt a blocking wait. */
     void InterruptWait(bool& interrupt_wait);

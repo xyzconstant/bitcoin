@@ -975,24 +975,9 @@ public:
     std::unique_ptr<BlockTemplate> createNewBlock(const BlockCreateOptions& options, bool cooldown) override
     {
         // Ensure m_tip_block is set so consumers of BlockTemplate can rely on that.
-        std::optional<BlockRef> maybe_tip{waitTipChanged(uint256::ZERO, MillisecondsDouble::max())};
-
+        const std::optional<BlockRef> maybe_tip{cooldown ? block_template_manager().WaitUntilSynced(m_interrupt_mining) : block_template_manager().WaitTipChanged(uint256::ZERO)};
         if (!maybe_tip) return {};
 
-        if (cooldown) {
-            // Do not return a template during IBD, because it can have long
-            // pauses and sometimes takes a while to get started. Although this
-            // is useful in general, it's gated behind the cooldown argument,
-            // because on regtest and single miner signets this would wait
-            // forever if no block was mined in the past day.
-            while (chainman().IsInitialBlockDownload()) {
-                maybe_tip = waitTipChanged(maybe_tip->hash, MillisecondsDouble{1000});
-                if (!maybe_tip || chainman().m_interrupt || WITH_LOCK(notifications().m_tip_block_mutex, return m_interrupt_mining)) return {};
-            }
-
-            // Also wait during the final catch-up moments after IBD.
-            if (!block_template_manager().CooldownIfHeadersAhead(*maybe_tip, m_interrupt_mining)) return {};
-        }
         auto new_template = block_template_manager().CreateNewTemplate(options);
         return std::make_unique<BlockTemplateImpl>(options, std::move(new_template), m_node);
     }

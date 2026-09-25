@@ -285,4 +285,24 @@ std::optional<BlockRef> BlockTemplateManager::WaitTipChanged(const uint256& curr
     return GetTip();
 }
 
+std::optional<BlockRef> BlockTemplateManager::WaitUntilSynced(bool& interrupt_mining)
+{
+    std::optional<BlockRef> tip{WaitTipChanged(uint256::ZERO)};
+    if (!tip) return {};
+
+    // Do not return a template during IBD, because it can have long
+    // pauses and sometimes takes a while to get started. Although this
+    // is useful in general, it's gated behind the cooldown argument,
+    // because on regtest and single miner signets this would wait
+    // forever if no block was mined in the past day.
+    while (m_chainman.IsInitialBlockDownload()) {
+        tip = WaitTipChanged(tip->hash, MillisecondsDouble{1000});
+        if (!tip || m_chainman.m_interrupt || WITH_LOCK(m_notifications.m_tip_block_mutex, return interrupt_mining)) return {};
+    }
+
+    // Also wait during the final catch-up moments after IBD.
+    if (!CooldownIfHeadersAhead(*tip)) return {};
+    return tip;
+}
+
 } // namespace node
