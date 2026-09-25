@@ -24,6 +24,7 @@
 #include <net.h>
 #include <netbase.h>
 #include <node/block_template_manager.h>
+#include <node/tip_waiter.h>
 #include <node/blockstorage.h>
 #include <node/context.h>
 #include <node/miner.h>
@@ -740,6 +741,7 @@ static RPCMethod getblocktemplate()
     NodeContext& node = EnsureAnyNodeContext(request.context);
     ChainstateManager& chainman = EnsureChainman(node);
     node::BlockTemplateManager& block_template_manager = EnsureBlockTemplateManager(node);
+    node::TipWaiter tip_waiter{MakeTipWaiter(node)};
 
     std::string strMode = "template";
     UniValue lpval = NullUniValue;
@@ -809,7 +811,7 @@ static RPCMethod getblocktemplate()
     const CTxMemPool& mempool = EnsureMemPool(node);
 
     WAIT_LOCK(cs_main, cs_main_lock);
-    uint256 tip{CHECK_NONFATAL(block_template_manager.GetTip()).value().hash};
+    uint256 tip{CHECK_NONFATAL(tip_waiter.GetTip()).value().hash};
 
     // Long Polling (BIP22)
     if (!lpval.isNull()) {
@@ -854,7 +856,7 @@ static RPCMethod getblocktemplate()
             while (IsRPCRunning()) {
                 // If hashWatchedChain is not a real block hash, this will
                 // return immediately.
-                std::optional<BlockRef> maybe_tip{block_template_manager.WaitTipChanged(hashWatchedChain, checktxtime)};
+                std::optional<BlockRef> maybe_tip{tip_waiter.WaitTipChanged(hashWatchedChain, checktxtime)};
                 // Node is shutting down
                 if (!maybe_tip) break;
                 tip = maybe_tip->hash;
@@ -868,7 +870,7 @@ static RPCMethod getblocktemplate()
                 checktxtime = std::chrono::seconds(10);
             }
         }
-        tip = CHECK_NONFATAL(block_template_manager.GetTip()).value().hash;
+        tip = CHECK_NONFATAL(tip_waiter.GetTip()).value().hash;
 
         if (!IsRPCRunning())
             throw JSONRPCError(RPC_CLIENT_NOT_CONNECTED, "Shutting down");

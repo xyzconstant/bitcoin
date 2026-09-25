@@ -6,7 +6,9 @@
 
 #include <chain.h>
 #include <node/context.h>
+#include <node/kernel_notifications.h>
 #include <node/miner.h>
+#include <node/tip_waiter.h>
 #include <pow.h>
 #include <primitives/block.h>
 #include <rpc/protocol.h>
@@ -114,6 +116,14 @@ node::BlockTemplateManager& EnsureBlockTemplateManager(const NodeContext& node)
         throw JSONRPCError(RPC_INTERNAL_ERROR, "Block template manager not found");
     }
     return *node.block_template_manager;
+}
+
+node::TipWaiter MakeTipWaiter(const NodeContext& node)
+{
+    if (!node.notifications) {
+        throw JSONRPCError(RPC_INTERNAL_ERROR, "Node notifications not found");
+    }
+    return node::TipWaiter{EnsureChainman(node), *node.notifications};
 }
 
 PeerManager& EnsurePeerman(const NodeContext& node)

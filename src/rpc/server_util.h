@@ -23,6 +23,7 @@ struct Params;
 namespace node {
 struct NodeContext;
 class BlockTemplateManager;
+class TipWaiter;
 } // namespace node
 
 node::NodeContext& EnsureAnyNodeContext(const std::any& context);
@@ -38,6 +39,7 @@ FeeRateEstimatorManager& EnsureFeeEstimatorMan(const node::NodeContext& node);
 FeeRateEstimatorManager& EnsureAnyFeeEstimatorMan(const std::any& context);
 CConnman& EnsureConnman(const node::NodeContext& node);
 node::BlockTemplateManager& EnsureBlockTemplateManager(const node::NodeContext& node);
+node::TipWaiter MakeTipWaiter(const node::NodeContext& node);
 PeerManager& EnsurePeerman(const node::NodeContext& node);
 AddrMan& EnsureAddrman(const node::NodeContext& node);
 AddrMan& EnsureAnyAddrman(const std::any& context);

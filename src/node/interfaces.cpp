@@ -42,6 +42,7 @@
 #include <node/miner.h>
 #include <node/mini_miner.h>
 #include <node/mining_types.h>
+#include <node/tip_waiter.h>
 #include <node/transaction.h>
 #include <node/types.h>
 #include <node/warnings.h>
@@ -883,6 +884,7 @@ public:
                                std::unique_ptr<CBlockTemplate> block_template,
                                const NodeContext& node) : m_create_options(std::move(create_options)),
                                                           m_block_template(std::move(block_template)),
+                                                          m_tip_waiter(*Assert(node.chainman), *Assert(node.notifications)),
                                                           m_node(node)
     {
         assert(m_block_template);
@@ -928,21 +930,21 @@ public:
     std::unique_ptr<BlockTemplate> waitNext(BlockWaitOptions options) override
     {
         auto new_template = block_template_manager().WaitAndCreateNewBlock(
-            m_block_template, options, m_create_options, m_interrupt_wait);
+            m_tip_waiter, m_block_template, options, m_create_options);
         if (new_template) return std::make_unique<BlockTemplateImpl>(m_create_options, std::move(new_template), m_node);
         return nullptr;
     }
 
     void interruptWait() override
     {
-        block_template_manager().InterruptWait(m_interrupt_wait);
+        m_tip_waiter.Interrupt();
     }
 
     const BlockCreateOptions m_create_options;
 
     const std::unique_ptr<CBlockTemplate> m_block_template;
 
-    bool m_interrupt_wait{false};
+    node::TipWaiter m_tip_waiter;
     node::BlockTemplateManager& block_template_manager() { return *Assert(m_node.block_template_manager); }
     const NodeContext& m_node;
 };
@@ -950,7 +952,7 @@ public:
 class MinerImpl : public Mining
 {
 public:
-    explicit MinerImpl(const NodeContext& node) : m_node(node) {}
+    explicit MinerImpl(const NodeContext& node) : m_tip_waiter(*Assert(node.chainman), *Assert(node.notifications)), m_node(node) {}
 
     bool isTestChain() override
     {
@@ -964,18 +966,18 @@ public:
 
     std::optional<BlockRef> getTip() override
     {
-        return block_template_manager().GetTip();
+        return m_tip_waiter.GetTip();
     }
 
     std::optional<BlockRef> waitTipChanged(uint256 current_tip, MillisecondsDouble timeout) override
     {
-        return block_template_manager().WaitTipChanged(current_tip, timeout, m_interrupt_mining);
+        return m_tip_waiter.WaitTipChanged(current_tip, timeout);
     }
 
     std::unique_ptr<BlockTemplate> createNewBlock(const BlockCreateOptions& options, bool cooldown) override
     {
         // Ensure m_tip_block is set so consumers of BlockTemplate can rely on that.
-        const std::optional<BlockRef> maybe_tip{cooldown ? block_template_manager().WaitUntilSynced(m_interrupt_mining) : block_template_manager().WaitTipChanged(uint256::ZERO)};
+        const std::optional<BlockRef> maybe_tip{cooldown ? m_tip_waiter.WaitUntilSynced() : m_tip_waiter.WaitTipChanged(uint256::ZERO)};
         if (!maybe_tip) return {};
 
         auto new_template = block_template_manager().CreateNewTemplate(options);
@@ -984,7 +986,7 @@ public:
 
     void interrupt() override
     {
-        block_template_manager().InterruptWait(m_interrupt_mining);
+        m_tip_waiter.Interrupt();
     }
 
     bool checkBlock(const CBlock& block, const node::BlockCheckOptions& options, std::string& reason, std::string& debug) override
@@ -1029,10 +1031,8 @@ public:
 
     const NodeContext* context() override { return &m_node; }
     ChainstateManager& chainman() { return *Assert(m_node.chainman); }
-    KernelNotifications& notifications() { return *Assert(m_node.notifications); }
     node::BlockTemplateManager& block_template_manager() { return *Assert(m_node.block_template_manager); }
-    // Treat as if guarded by notifications().m_tip_block_mutex
-    bool m_interrupt_mining{false};
+    node::TipWaiter m_tip_waiter;
     const NodeContext& m_node;
 };
 

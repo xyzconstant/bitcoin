@@ -10,9 +10,9 @@
 #include <consensus/validation.h>
 #include <interfaces/types.h>
 #include <kernel/chainparams.h>
-#include <node/kernel_notifications.h>
 #include <node/miner.h>
 #include <node/mining_args.h>
+#include <node/tip_waiter.h>
 #include <primitives/block.h>
 #include <sync.h>
 #include <uint256.h>
@@ -22,8 +22,8 @@
 #include <validationinterface.h>
 
 #include <algorithm>
+#include <chrono>
 #include <compare>
-#include <condition_variable>
 #include <numeric>
 #include <utility>
 #include <vector>
@@ -33,9 +33,8 @@ namespace node {
 using interfaces::BlockRef;
 
 BlockTemplateManager::BlockTemplateManager(CTxMemPool& mempool, ChainstateManager& chainman,
-                                           KernelNotifications& notifications,
                                            BlockCreateOptions block_create_args)
-    : m_mempool(mempool), m_chainman(chainman), m_notifications(notifications), m_block_create_args(std::move(block_create_args))
+    : m_mempool(mempool), m_chainman(chainman), m_block_create_args(std::move(block_create_args))
 {
 }
 
@@ -111,26 +110,11 @@ bool BlockTemplateManager::SubmitBlock(const std::shared_ptr<const CBlock>& bloc
     return result;
 }
 
-std::optional<BlockRef> BlockTemplateManager::GetTip()
-{
-    LOCK(::cs_main);
-    CBlockIndex* tip{m_chainman.ActiveChain().Tip()};
-    if (!tip) return {};
-    return BlockRef{tip->GetBlockHash(), tip->nHeight};
-}
-
-void BlockTemplateManager::InterruptWait(bool& interrupt_wait)
-{
-    LOCK(m_notifications.m_tip_block_mutex);
-    interrupt_wait = true;
-    m_notifications.m_tip_block_cv.notify_all();
-}
-
 std::unique_ptr<CBlockTemplate> BlockTemplateManager::WaitAndCreateNewBlock(
+    TipWaiter& tip_waiter,
     const std::unique_ptr<CBlockTemplate>& block_template,
     const BlockWaitOptions& wait_options,
-    const BlockCreateOptions& create_options,
-    bool& interrupt_wait)
+    const BlockCreateOptions& create_options)
 {
     // Delay calculating the current template fees, just in case a new block
     // comes in before the next tick.
@@ -144,26 +128,10 @@ std::unique_ptr<CBlockTemplate> BlockTemplateManager::WaitAndCreateNewBlock(
     const bool allow_min_difficulty{m_chainman.GetParams().GetConsensus().fPowAllowMinDifficultyBlocks};
 
     do {
-        bool tip_changed{false};
-        {
-            WAIT_LOCK(m_notifications.m_tip_block_mutex, lock);
-            // Note that wait_until() checks the predicate before waiting
-            m_notifications.m_tip_block_cv.wait_until(lock, std::min(now + tick, deadline), [&]() EXCLUSIVE_LOCKS_REQUIRED(m_notifications.m_tip_block_mutex) {
-                AssertLockHeld(m_notifications.m_tip_block_mutex);
-                const auto tip_block{m_notifications.TipBlock()};
-                // We assume tip_block is set, because this is an instance
-                // method on BlockTemplate and no template could have been
-                // generated before a tip exists.
-                tip_changed = Assume(tip_block) && tip_block != block_template->block.hashPrevBlock;
-                return tip_changed || m_chainman.m_interrupt || interrupt_wait;
-            });
-            if (interrupt_wait) {
-                interrupt_wait = false;
-                return nullptr;
-            }
-        }
+        const std::optional<BlockRef> tip{tip_waiter.WaitTipChanged(block_template->block.hashPrevBlock, std::min(tick, MillisecondsDouble{deadline - now}))};
+        if (!tip) return nullptr;
+        bool tip_changed{tip->hash != block_template->block.hashPrevBlock};
 
-        if (m_chainman.m_interrupt) return nullptr;
         // At this point the tip changed, a full tick went by or we reached
         // the deadline.
 
@@ -207,102 +175,6 @@ std::unique_ptr<CBlockTemplate> BlockTemplateManager::WaitAndCreateNewBlock(
     } while (now < deadline);
 
     return nullptr;
-}
-
-bool BlockTemplateManager::CooldownIfHeadersAhead(const BlockRef& last_tip, bool& interrupt_mining)
-{
-    uint256 last_tip_hash{last_tip.hash};
-
-    while (const std::optional<int> remaining = m_chainman.BlocksAheadOfTip()) {
-        const int cooldown_seconds = std::clamp(*remaining, 3, 20);
-        const auto cooldown_deadline{MockableSteadyClock::now() + std::chrono::seconds{cooldown_seconds}};
-
-        {
-            WAIT_LOCK(m_notifications.m_tip_block_mutex, lock);
-            m_notifications.m_tip_block_cv.wait_until(lock, cooldown_deadline, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_notifications.m_tip_block_mutex) {
-                const auto tip_block = m_notifications.TipBlock();
-                return m_chainman.m_interrupt || interrupt_mining || (tip_block && *tip_block != last_tip_hash);
-            });
-            if (m_chainman.m_interrupt || interrupt_mining) {
-                interrupt_mining = false;
-                return false;
-            }
-
-            // If the tip changed during the wait, extend the deadline
-            const auto tip_block = m_notifications.TipBlock();
-            if (tip_block && *tip_block != last_tip_hash) {
-                last_tip_hash = *tip_block;
-                continue;
-            }
-        }
-
-        // No tip change and the cooldown window has expired.
-        if (MockableSteadyClock::now() >= cooldown_deadline) break;
-    }
-
-    return true;
-}
-
-std::optional<BlockRef> BlockTemplateManager::WaitTipChanged(const uint256& current_tip, MillisecondsDouble timeout)
-{
-    bool interrupt_wait{false};
-    return WaitTipChanged(current_tip, timeout, interrupt_wait);
-}
-
-std::optional<BlockRef> BlockTemplateManager::WaitTipChanged(const uint256& current_tip, MillisecondsDouble& timeout, bool& interrupt)
-{
-    Assume(timeout >= 0ms); // No internal callers should use a negative timeout
-    if (timeout < 0ms) timeout = 0ms;
-    if (timeout > std::chrono::years{100}) timeout = std::chrono::years{100}; // Upper bound to avoid UB in std::chrono
-    auto deadline{std::chrono::steady_clock::now() + timeout};
-    {
-        WAIT_LOCK(m_notifications.m_tip_block_mutex, lock);
-        // For callers convenience, wait longer than the provided timeout
-        // during startup for the tip to be non-null. That way this function
-        // always returns valid tip information when possible and only
-        // returns null when shutting down, not when timing out.
-        m_notifications.m_tip_block_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_notifications.m_tip_block_mutex) {
-            AssertLockHeld(m_notifications.m_tip_block_mutex);
-            return m_notifications.TipBlock() || m_chainman.m_interrupt || interrupt;
-        });
-        if (m_chainman.m_interrupt || interrupt) {
-            interrupt = false;
-            return {};
-        }
-        // At this point TipBlock is set, so continue to wait until it is
-        // different from `current_tip` provided by caller.
-        m_notifications.m_tip_block_cv.wait_until(lock, deadline, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_notifications.m_tip_block_mutex) {
-            return Assume(m_notifications.TipBlock()) != current_tip || m_chainman.m_interrupt || interrupt;
-        });
-        if (m_chainman.m_interrupt || interrupt) {
-            interrupt = false;
-            return {};
-        }
-    }
-
-    // Must release m_tip_block_mutex before GetTip() locks cs_main, to
-    // avoid deadlocks.
-    return GetTip();
-}
-
-std::optional<BlockRef> BlockTemplateManager::WaitUntilSynced(bool& interrupt_mining)
-{
-    std::optional<BlockRef> tip{WaitTipChanged(uint256::ZERO)};
-    if (!tip) return {};
-
-    // Do not return a template during IBD, because it can have long
-    // pauses and sometimes takes a while to get started. Although this
-    // is useful in general, it's gated behind the cooldown argument,
-    // because on regtest and single miner signets this would wait
-    // forever if no block was mined in the past day.
-    while (m_chainman.IsInitialBlockDownload()) {
-        tip = WaitTipChanged(tip->hash, MillisecondsDouble{1000});
-        if (!tip || m_chainman.m_interrupt || WITH_LOCK(m_notifications.m_tip_block_mutex, return interrupt_mining)) return {};
-    }
-
-    // Also wait during the final catch-up moments after IBD.
-    if (!CooldownIfHeadersAhead(*tip)) return {};
-    return tip;
 }
 
 } // namespace node
